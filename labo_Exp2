@@ -1,4 +1,5 @@
 
+
 ###--- LOADING DATA ---###
 
 import pandas as pd
@@ -187,7 +188,7 @@ def sellCondition(row,periode):
 ###--- EXECUTION ---###
 
 dfTest = df.copy()
-# dfTest = df['2021-01-01':]
+dfTest = df['2021-01-01':]
 dt = None
 dt = pd.DataFrame(columns = ['date','position', 'price', 'frais' ,'fiat', 'coins', 'wallet', 'drawBack'])
 
@@ -212,7 +213,7 @@ for index, row in dfTest.iterrows():
     if wallet > lastAth:
       lastAth = wallet
     # print("Buy COIN at",buyPrice,'$ the', index)
-    myrow = {'date': index,'position': "Buy",'price': buyPrice,'frais': frais,'fiat': usdt,'labo':lb,'coins': coin,'wallet': wallet,'drawBack':(wallet-lastAth)/lastAth}
+    myrow = {'date': index,'position': "Buy",'price': buyPrice,'frais': frais,'fiat': usdt,'coins': coin,'wallet': wallet,'drawBack':(wallet-lastAth)/lastAth}
     dt = dt.append(myrow,ignore_index=True)
   
   # Sell
