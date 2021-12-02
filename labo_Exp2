@@ -1,0 +1,275 @@
+
+###--- LOADING DATA ---###
+
+import pandas as pd
+from binance.client import Client
+import ta
+import matplotlib.pyplot as plt
+
+client = Client()
+
+pairName = "BNBUSDT"
+start = "2017-1-1"
+
+tf = Client.KLINE_INTERVAL_1HOUR
+
+klinesT = client.get_historical_klines(pairName, tf, start)
+
+df = pd.DataFrame(klinesT, columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_av', 'trades', 'tb_base_av', 'tb_quote_av', 'ignore' ])
+df['close'] = pd.to_numeric(df['close'])
+df['high'] = pd.to_numeric(df['high'])
+df['low'] = pd.to_numeric(df['low'])
+df['open'] = pd.to_numeric(df['open'])
+
+del df['ignore']
+del df['close_time']
+del df['quote_av']
+del df['trades']
+del df['tb_base_av']
+del df['tb_quote_av']
+
+df = df.set_index(df['timestamp'])
+df.index = pd.to_datetime(df.index, unit='ms')
+del df['timestamp']
+
+###--- LOADING DATA FINISHED ---###
+
+
+##-- PARAMETRES DE LA STRATÉGIE ---###
+periode = 15
+precision = 2
+###--- FIN ---###
+
+
+###--- FUNCTION'S STRATEGY ---###
+
+def egal(x,ref,precision):
+
+    ref1 = ref-precision
+    ref2 = ref+precision
+
+    return ref1<=x<=ref2
+
+    
+def supegal(x,ref,precision):
+
+    ref1 = ref-precision
+    ref2 = ref+precision
+
+    return x>=ref1 or x>=ref2
+
+    
+def infegal(x,ref,precision):
+
+    ref1 = ref-precision
+    ref2 = ref+precision
+
+    return x<=ref1 or x<=ref2
+
+def all_equal(liste,precision):
+
+    ref = liste[0]
+
+    for e in liste:
+        if egal(e,ref, precision):
+            continue
+        else:
+            return False
+
+    return True
+
+    
+def triangle_buy(liste,precision):
+
+    ref = liste[0]
+    del liste[0]
+
+    for e in liste :
+        if infegal(e,ref,precision):
+            ref = e
+            continue
+        else:
+            return False
+
+    return True
+
+    
+
+def triangle_sell(liste,precision):
+
+    ref = liste[0]    
+    del liste[0]
+
+    for e in liste :
+        if infegal(e,ref,precision):
+            ref = e
+            continue
+        else:
+            return False
+
+    return True
+
+###--- FUNCTION'S STRATEGY LOADED ---###
+
+
+
+###--- INDICATORS ---###
+
+df.drop(df.columns.difference(['open','high','low','close','volume']), 1, inplace=True)
+
+df['EMA50']=ta.trend.ema_indicator(df['close'], 50)
+df['STOCH_RSI']=ta.momentum.stochrsi(df['close'])
+df['KIJUN'] = ta.trend.ichimoku_base_line(df['high'],df['low'])
+df['TENKAN'] = ta.trend.ichimoku_conversion_line(df['high'],df['low'])
+df['SSA'] = ta.trend.ichimoku_a(df['high'],df['low'],3,38).shift(periods=48)
+df['SSB'] = ta.trend.ichimoku_b(df['high'],df['low'],38,46).shift(periods=48)
+df['CHIKOU']=df['close'].shift(periods=20)
+
+
+n = 1
+while n<periode:
+    df['CHIKOU_OPEN'+str(n)] = df['open'].shift(n)
+    n += 1
+
+n = 1
+while n<periode:
+    df['CHIKOU_CLOSE'+str(n)] = df['close'].shift(n)
+    n += 1
+
+###--- INDICATORS LOADED ---###
+
+
+
+###-- CONDITIONS ---##
+
+def buyCondition(row,periode):
+    liste_o = []
+    n = 1
+    while n<periode:
+        liste_o.append(row['CHIKOU_OPEN'+str(n)])
+        n += 1
+
+    liste_c = []    
+    n = 1
+    while n<periode:
+        liste_c.append(row['CHIKOU_CLOSE'+str(n)])
+        n += 1
+
+
+    cond1 =  all_equal(liste_c,precision)
+    cond2 = triangle_buy(liste_o, precision)
+    
+    return cond1 and cond2
+
+def sellCondition(row,periode):
+    liste_o = []
+    n = 1
+    while n<periode:
+        liste_o.append(row['CHIKOU_OPEN'+str(n)])
+        n += 1
+
+    liste_c = []    
+    n = 1
+    while n<periode:
+        liste_c.append(row['CHIKOU_CLOSE'+str(n)])
+        n += 1
+
+
+    cond1 =  all_equal(liste_o,precision)
+    cond2 = triangle_sell(liste_c, precision)
+    
+    return cond1 and cond2
+
+###--- CONDITIONS LOADED ---###
+
+
+
+###--- EXECUTION ---###
+
+dfTest = df.copy()
+# dfTest = df['2021-01-01':]
+dt = None
+dt = pd.DataFrame(columns = ['date','position', 'price', 'frais' ,'fiat', 'coins', 'wallet', 'drawBack'])
+
+usdt = 1000
+initalWallet = usdt
+coin = 0
+wallet = 1000
+lastAth = 0
+lastRow = dfTest.iloc[0]
+fee = 0.0007
+
+for index, row in dfTest.iterrows():
+  
+  #Buy
+  if buyCondition(row, precision) and row['STOCH_RSI'] > 0.8 and usdt > 0:
+    buyPrice = row['close']
+    coin = usdt / buyPrice
+    frais = fee * coin
+    coin = coin - frais
+    usdt = 0
+    wallet = coin * row['close']
+    if wallet > lastAth:
+      lastAth = wallet
+    # print("Buy COIN at",buyPrice,'$ the', index)
+    myrow = {'date': index,'position': "Buy",'price': buyPrice,'frais': frais,'fiat': usdt,'labo':lb,'coins': coin,'wallet': wallet,'drawBack':(wallet-lastAth)/lastAth}
+    dt = dt.append(myrow,ignore_index=True)
+  
+  # Sell
+  elif (row['close'] < row['SSA'] or row['close'] < row['SSB']) and row['STOCH_RSI'] < 0.2 and coin > 0:
+    sellPrice = row['close']
+    usdt = coin * sellPrice
+    frais = fee * usdt
+    usdt = usdt - frais
+    coin = 0
+    wallet = usdt
+    if wallet > lastAth:
+      lastAth = wallet
+    # print("Sell COIN at",sellPrice,'$ the', index)
+    myrow = {'date': index,'position': "Sell",'price': sellPrice,'frais': frais,'fiat': usdt,'coins': coin,'wallet': wallet,'drawBack':(wallet-lastAth)/lastAth}
+    dt = dt.append(myrow,ignore_index=True)
+  
+  lastRow = row
+
+###--- EXECUTION FINISHED ---###
+
+
+###--- RESULTS ---###
+
+print("Pair Symbol :",pairName)
+print("Period : [" + str(dfTest.index[0]) + "] -> [" +str(dfTest.index[len(dfTest)-1]) + "]")
+dt = dt.set_index(dt['date'])
+dt.index = pd.to_datetime(dt.index)
+dt['resultat'] = dt['wallet'].diff()
+dt['resultat%'] = dt['wallet'].pct_change()*100
+dt.loc[dt['position']=='Buy','resultat'] = None
+dt.loc[dt['position']=='Buy','resultat%'] = None
+
+dt['tradeIs'] = ''
+dt.loc[dt['resultat']>0,'tradeIs'] = 'Good'
+dt.loc[dt['resultat']<=0,'tradeIs'] = 'Bad'
+
+iniClose = dfTest.iloc[0]['close']
+lastClose = dfTest.iloc[len(dfTest)-1]['close']
+holdPorcentage = ((lastClose - iniClose)/iniClose) * 100
+algoPorcentage = ((wallet - initalWallet)/initalWallet) * 100
+vsHoldPorcentage = ((algoPorcentage - holdPorcentage)/holdPorcentage) * 100
+
+print("Starting balance : 1000 $")
+print("Final balance :",round(wallet,2),"$")
+print("Performance vs US Dollar :",round(algoPorcentage,2),"%")
+print("Buy and Hold Performence :",round(holdPorcentage,2),"%")
+print("Performance vs Buy and Hold :",round(vsHoldPorcentage,2),"%")
+print("Number of negative trades : ",dt.groupby('tradeIs')['date'].nunique()['Bad'])
+print("Number of positive trades : ",dt.groupby('tradeIs')['date'].nunique()['Good'])
+print("Average Positive Trades : ",round(dt.loc[dt['tradeIs'] == 'Good', 'resultat%'].sum()/dt.loc[dt['tradeIs'] == 'Good', 'resultat%'].count(),2),"%")
+print("Average Negative Trades : ",round(dt.loc[dt['tradeIs'] == 'Bad', 'resultat%'].sum()/dt.loc[dt['tradeIs'] == 'Bad', 'resultat%'].count(),2),"%")
+idbest = dt.loc[dt['tradeIs'] == 'Good', 'resultat%'].idxmax()
+idworst = dt.loc[dt['tradeIs'] == 'Bad', 'resultat%'].idxmin()
+print("Best trade +"+str(round(dt.loc[dt['tradeIs'] == 'Good', 'resultat%'].max(),2)),"%, the ",dt['date'][idbest])
+print("Worst trade",round(dt.loc[dt['tradeIs'] == 'Bad', 'resultat%'].min(),2),"%, the ",dt['date'][idworst])
+print("Worst drawBack", str(100*round(dt['drawBack'].min(),2)),"%")
+print("Total fee : ",round(dt['frais'].sum(),2),"$")
+
+dt[['wallet','price']].plot(subplots=True, figsize=(12,10))
+print('PLOT')
